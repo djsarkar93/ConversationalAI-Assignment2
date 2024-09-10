@@ -202,10 +202,20 @@ def generate_answer(user_query, top_k, threshold):
     direct_answer = (direct_answer[0]).get('generated_text', "Sorry, I don't know the answer.")
     #print(f'SLM Direct Answer: {direct_answer}')
     
+    # Identify the most important terms in the user query using using the language model
+    prompt_template = (
+        f"Extract the most important term from the following text: "
+        f"{user_query}"
+    )
+    imp_term = t2tg_pipeline(prompt_template)
+    imp_term = (imp_term[0]).get('generated_text', '')
+    #print(f'SLM Important Term: {imp_term}')    
+    
     # Given a user prompt, attempt to fetch (local/external) context for the prompt
     # and then generate an answer using the language model
+    
     # Get user query embeddings
-    user_query_embedding = generate_user_query_embedding(user_query)
+    user_query_embedding = generate_user_query_embedding(imp_term)
     
     # Get the top k user query contexts from the local database
     local_contexts = retrieve_context_from_local_db(
@@ -220,18 +230,8 @@ def generate_answer(user_query, top_k, threshold):
     
     # If some local context is found, use that. Otherwise, attempt to get external context
     if local_contexts:
-        user_query_context = local_contexts
-    
+        user_query_context = local_context
     else:
-        # Identify the most important terms in the user query using using the language model
-        prompt_template = (
-            f"Extract the most important term from the following text: "
-            f"{user_query}"
-        )
-        imp_term = t2tg_pipeline(prompt_template)
-        imp_term = (imp_term[0]).get('generated_text', '')
-        #print(f'SLM Important Term: {imp_term}')
-        
         # If an important term is found, search UMLs BioInformatics Web Ontology for the term.
         if imp_term:
             external_context = search_umls(
@@ -240,34 +240,34 @@ def generate_answer(user_query, top_k, threshold):
                 api_key      = UMLS_API_KEY
             )
             #print(f'External Context: {external_context}')
+            
             user_query_context = external_context if external_context else ''
-        
         else:
             user_query_context = ''
+    
+    # Using the context generate answer using the language model
+    default_answer = "Sorry, I don't know the answer."
+    
+    if user_query_context:
+        # Trim the context to the appropriate number of tokens
+        user_query_context_trimmed = ' '.join(user_query_context.split()[:151])
+        user_query_context_trimmed = imp_term + ' is ' + user_query_context_trimmed
+        #print(f'Trimmed Context: {user_query_context_trimmed}')
         
-        # Using the context generate answer using the language model
-        default_answer = "Sorry, I don't know the answer."
-        if user_query_context:
-            # Trim the context to the appropriate number of tokens
-            user_query_context_trimmed = ' '.join(user_query_context.split()[:151])
-            user_query_context_trimmed = imp_term + ' is ' + user_query_context_trimmed
-            #print(f'Trimmed Context: {user_query_context_trimmed}')
-            
-            prompt_template = (
-                f"Using the information provided in the context, write a complete sentence that answers the following question. "
-                f"Ensure that the answer is paraphrased in your own words. "
-                f"If the context does not contain enough information to answer, write 'Sorry, I don't know the answer.'\n\n"
-                f"Context: '{user_query_context_trimmed.lower()}'.\n\n"
-                f"Question: '{user_query.lower()}'."
-            )
-            #print(prompt_template)
-            
-            context_answer = t2tg_pipeline(prompt_template)[0]
-            context_answer =  context_answer.get('generated_text', default_answer)
-            #print(f'SLM Context Answer: {context_answer}')
+        prompt_template = (
+            f"Using the information provided in the context, write a complete sentence that answers the following question. "
+            f"Ensure that the answer is paraphrased in your own words. "
+            f"If the context does not contain enough information to answer, write 'Sorry, I don't know the answer.'\n\n"
+            f"Context: '{user_query_context_trimmed.lower()}'.\n\n"
+            f"Question: '{user_query.lower()}'."
+        )
+        #print(prompt_template)
         
-        else:
-            context_answer = ''
+        context_answer = t2tg_pipeline(prompt_template)[0]
+        context_answer =  context_answer.get('generated_text', default_answer)
+        #print(f'SLM Context Answer: {context_answer}')
+    else:
+        context_answer = ''
     
     # Using the language model, determine the best answer amongst the direct & context answers
     comparison_prompt = (
@@ -283,7 +283,6 @@ def generate_answer(user_query, top_k, threshold):
     
     best_answer = t2tg_pipeline(comparison_prompt)[0].get('generated_text')
     #print(f'Best Answer: {best_answer}')
-    
     best_answer = direct_answer if 'answer a' in best_answer.lower() else context_answer
     return best_answer
 
